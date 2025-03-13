@@ -1,57 +1,433 @@
-Question 1: How does sales performance vary over time?
-Objective: Identify monthly trends and seasonal patterns.
+---
+editor_options: 
+  markdown: 
+    wrap: 72
+---
 
-test
-Tasks:
+# Superstore EDA
 
-Identify which months consistently show sales peaks
-Find any unusual dips in the trend line
-(optional) Calculate YOY growth rate for the most recent complete year
-Suggest potential reasons for seasonal patterns
-Question 2: Which product categories have the best/worst profit margins?
-Objective: Identify high/low performing product categories
+```{r}
+# Setup
+library(tidyr)
+library(tidyverse)
+library(ggplot2)
 
-Tasks:
+superstore <- read.csv("Sample - Superstore.csv")
+```
 
-Identify which category has the thinnest margins
-Calculate the profit margin difference between top and bottom categories
-Suggest strategies to improve low-performing categories
-Question 3: How do regional performances compare?
-Objective: Compare sales distribution and profitability across regions
+```{r}
+# Exploratory analysis
+str(superstore)
+```
 
-Tasks:
+```{r}
+#Checking for null values
+sum(is.na(superstore))
+# Checking for duplicates
+sum(duplicated(superstore))
 
-Identify which region has both high sales and high profitability
-Find any regions with negative profits
-Analyze if high sales always correlate with high profits
-Propose regional-specific strategies based on findings
-Question 4: What does customer segmentation reveal?
-Objective: Identify valuable customer groups using RFM analysis
+# convert columns to correct types
+superstore$Order.Date <- as.Date(superstore$Order.Date, format = "%m/%d/%Y")
+superstore$Ship.Date <- as.Date(superstore$Ship.Date, format = "%m/%d/%Y")
 
-Tasks:
+# Checking for data consistency
+table(superstore$Category)
+table(superstore$Region)
+table(superstore$Ship.Mode)
 
-Calculate percentage of customers in each segment
-Identify which segment generates the most revenue
-Develop retention strategies for “At Risk” customers
-Suggest marketing approaches for “High Spenders”
-Question 5: How does shipping mode affect profitability?
-Objective: Analyze cost-to-serve across shipping modes
+```
 
-Tasks:
+```{r}
+#creating new month and year column
+superstore <- superstore %>%
+  mutate(Year = format(`Order.Date`, "%Y")) %>%
+  mutate(Month = format(`Order.Date`, "%m")) %>%
+  mutate(YearMonth = format(`Order.Date`, "%Y-%m"))
 
-Compare profit margins across shipping modes
-Calculate profit per order for each shipping mode
-Suggest optimal shipping strategy based on findings
-Extra Challenge
-Identify 3 actionable business recommendations.
-Propose 2 new questions for deeper analysis.
-Estimate potential financial impact of your recommendations.
-Discussion Points:
+superstore$Year <- as.numeric(as.character(superstore$Year))  # Keep Year numeric
+```
 
-How do sales trends correlate with marketing initiatives?
+```{r}
+# handling outliers
+superstore_numeric <- superstore %>%
+  select(Order.ID, Sales, Profit)
 
-Are there regional preferences for product categories?
+superstore_numeric_long <- superstore_numeric %>%
+  pivot_longer(cols = c(Sales, Profit), 
+               names_to = "Variable",
+               values_to = "Values")
 
-What operational changes could improve low-margin categories?
+outliers_box <- ggplot(superstore_numeric_long, aes(Values, Variable))
+outliers_box + geom_boxplot()
+```
 
-How might customer segmentation affect inventory management?
+```{r}
+# checking outliers
+sales_outlier <- superstore %>%
+  subset(Sales > 5000)
+```
+
+-\> All based on high quantity, technology purchases and hence not
+removed
+
+```{r}
+# checking outliers
+profit_outlier <- superstore %>%
+  subset(Profit > 3000 | Profit < -2500)
+```
+
+-\> Negative outliers because of large discounts and positive outliers
+align with sales outliers
+
+# Question 1: How does sales performance vary over time?
+
+## Objective: Identify monthly trends and seasonal patterns.
+
+### Tasks:
+
+```{r}
+# group sales by month and year
+sales_by_month_year <- superstore %>%
+  group_by(YearMonth) %>%
+  summarize(TotalSales = sum(Sales, na.rm = TRUE))
+
+# create a table with sales by year and month
+sales_by_month_year_split <- superstore %>%
+  select(Sales, Month, Year)
+sales_by_month_year_split_wide <- sales_by_month_year_split %>%
+  pivot_wider(names_from = Month, values_from = Sales, 
+              values_fn = sum, names_prefix = "Month_")
+
+sales_by_month_year_split_wide <- sales_by_month_year_split_wide %>%
+  select(Year, sort(names(.)[-1]))
+
+# Reshape data back to long format for plotting
+sales_by_month_year_split_long <- sales_by_month_year_split_wide %>%
+  pivot_longer(cols = starts_with("Month_"), names_to = "Month", 
+               values_to = "Sales") %>%
+  mutate(Month = as.integer(gsub("Month_", "", Month)))
+```
+
+-   Identify which months consistently show sales peaks
+
+```{r}
+# Plotting
+ggplot(sales_by_month_year, aes(x = YearMonth, y = TotalSales)) +
+  geom_col() +
+  labs(title = "Sales Over Time", x = "Month-Year", y = "Total Sales") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+-\> Shows sales peaks towards end of the year
+
+```{r}
+# normalise for better compariseon
+sales_by_month_year_split_long <- sales_by_month_year_split_long %>%
+  group_by(Year) %>%
+  mutate(Sales_Scaled = (Sales - min(Sales)) / (max(Sales) - min(Sales))) %>%
+  ungroup()
+# output in heatmap
+heatmap_plot <- ggplot(sales_by_month_year_split_long, aes(x = factor(Month), y = factor(Year), fill = Sales_Scaled)) 
+heatmap_plot +  geom_tile() +
+  scale_fill_viridis(name = "Sales", option = "C") +
+  labs(x = "Month", y = "Year", title = "Sales Heatmap") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+-\> Normalised sales per month & year confirm peaks for last 4 months of
+the year with November and December dominating. Surprising small peak as
+well in March.
+
+```{r}
+# multiple regression with year as continuous and month as dummy variable
+sales_by_month_year_split_long$Month <- as.factor(sales_by_month_year_split_long$Month)  # Ensure Month is categorical
+sales_by_month_year_split_long$Year <- sales_by_month_year_split_long$Year - min(sales_by_month_year_split_long$Year)  # Shift year so the first year is 0
+model_final <- lm(Sales ~ Year + Month, data = sales_by_month_year_split_long)
+summary(model_final)
+```
+
+-\> Multiple regression shows significant increase in sales per year and
+confirms the significance of the large peaks at the end of the year
+(September, November and December) and also shows significant deviation
+in March.
+
+```{r}
+ggplot(sales_by_month_year_split_long, aes(x = Year, y = Sales)) +
+  geom_point() +  # Scatter plot of sales data
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +  # Regression line
+  labs(title = "Sales Over Years",
+       x = "Years (Starting at 0)",
+       y = "Sales") +
+  theme_minimal()
+
+ggplot(sales_by_month_year_split_long, aes(x = as.factor(Month), y = Sales)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Monthly Sales Seasonality",
+       x = "Month",
+       y = "Sales") +
+  theme_minimal()
+```
+
+-   Calculate YOY growth rate for the most recent complete year
+
+```{r}
+# grouping by year
+sales_by_year <- superstore %>%
+  select(Sales, Year) %>%
+  group_by(Year) %>%
+  summarise(TotalSales =sum(Sales))
+
+#calculating growth
+sales_by_year <- sales_by_year %>%
+  mutate(YoY_Growth = round((TotalSales / lag(TotalSales) -1)*100,2)) %>%
+  subset(Year > 2014)
+
+# plotting
+growth_plot <- ggplot(sales_by_year, aes(x=factor(Year), y=YoY_Growth, fill=YoY_Growth > 0)) 
+growth_plot+
+  geom_col() +
+  scale_fill_manual(values=c("FALSE"="red", "TRUE"="darkgreen")) +
+  labs(title = "YoY Growth Rate", y="Growth in %", x="Year") +
+  geom_text(aes(label=sprintf("%.1f", YoY_Growth))) +
+  theme_minimal() + theme(legend.position = "none")
+```
+
+-   Suggest potential reasons for seasonal patterns
+
+    --\> Potential reasons include christmas for November and December
+    and end of season sales in winter (March) and summer (September)
+
+```         
+```
+
+# Question 2: Which product categories have the best/worst profit margins?
+
+## Objective: Identify high/low performing product categories
+
+### Tasks:
+
+-   Identify which category has the thinnest margins
+
+```{r}
+# create df for categories
+profit_margin_by_cat <- superstore %>%
+  select(Category, Sales, Profit) %>%
+  group_by(Category) %>%
+  summarise(TotalSales = sum(Sales), TotalProfit =sum(Profit)) %>%
+  mutate(ProfitMargin = round(TotalProfit/TotalSales*100,2)) %>%
+  arrange(ProfitMargin)
+
+cat_lowest_margin = slice(profit_margin_by_cat,1)
+cat_lowest_margin
+```
+
+-\> The Furniture Category has the lowest Margins with 2.49%
+
+-   Calculate the profit margin difference between top and bottom
+    categories
+
+```{r}
+highest_margin = profit_margin_by_cat[nrow(profit_margin_by_cat),]$ProfitMargin
+highest_margin - cat_lowest_margin$ProfitMargin
+```
+
+-\> The difference is 14.91% between the Furniture(lowest) and
+Technology (highest) Category Profit Margin
+
+-   Suggest strategies to improve low-performing categories
+
+-\> Check for subcategories within the category to see if there are
+products that can be dropped, check price increases or cost reduction
+measurements. At the same time, the sales volume for the category must
+be checked to make any early conclusions. It could be that the category
+has much higher sales rates and naturally lower profit margins but still
+resulting in high overall Profit.
+
+# Question 3: How do regional performances compare?
+
+## Objective: Compare sales distribution and profitability across regions
+
+### Tasks:
+
+-   Identify which region has both high sales and high profitability
+
+```{r}
+# create df for categories
+performance_by_region <- superstore %>%
+  select(Region, Sales, Profit) %>%
+  group_by(Region) %>%
+  summarise(TotalSales = sum(Sales), TotalProfit =sum(Profit)) %>%
+  mutate(ProfitNormalised = TotalProfit / sum(TotalProfit),
+         SalesNormalised = TotalSales / sum(TotalSales), 
+         Performance = ProfitNormalised + SalesNormalised) %>%
+  mutate(ProfitMargin = round(TotalProfit/TotalSales*100,2)) %>%
+  arrange(desc(Performance))
+
+performance_by_region[1,]$Region
+
+```
+
+The Region "West" shows the highest Sales and Profitability
+
+-   Find any regions with negative profits
+
+```{r}
+regions_with_loss <- performance_by_region %>%
+  subset(TotalProfit < 0)
+regions_with_loss
+
+```
+
+-\> There are no regions with negative profits
+
+-   Analyze if high sales always correlate with high profits
+
+```{r}
+sale_profit_plot <- ggplot(performance_by_region, aes(x=TotalSales, y=TotalProfit))
+sale_profit_plot + geom_point() + geom_smooth(method = "lm")
+```
+
+```{r}
+# Fit the linear regression model
+model <- lm(TotalSales ~ TotalProfit, data = performance_by_region)
+
+# Display the summary of the model
+summary(model)
+```
+
+-\> Correlation of 0.85 shows strong relation between Sales and Profit.
+However, with a p-value of 7%, this is statistically insignificant
+
+-   Propose regional-specific strategies based on findings
+
+-\> Profit Margin of the Central Region seems to be the only clear
+outlier and needs to be further evaluated. Regional performance needs to
+be contrasted to factors such as market size and market share in the
+various regions to derive appropriate conclusions on the differing
+values in the analysis.
+
+# Question 4: What does customer segmentation reveal?
+
+## Objective: Identify valuable customer groups using RFM analysis
+
+### Tasks:
+
+-   Calculate percentage of customers in each segment
+-   Identify which segment generates the most revenue
+
+```{r}
+customer_segment <- superstore %>%
+  select(Customer.ID, Segment, Sales) %>%
+  group_by(Segment) %>%
+  summarise(Customers = n_distinct(Customer.ID), TotalSales = sum(Sales)) %>%
+  mutate(CustomersShare = round(Customers/ sum(Customers)*100,2))
+print(customer_segment)
+```
+
+-   Develop retention strategies for “At Risk” customers
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Get relevant customer data
+at_risk <- superstore %>%
+  select(Order.Date, Customer.ID, Sales) %>%
+  group_by(Customer.ID) %>%
+  summarise(
+    LastPurchase = max(Order.Date),
+    Spending = sum(Sales),
+    TotalPurchases = n(),
+    NumberPurchasesLast3Months = sum(Order.Date >= as.Date("2018-01-01") - months(3)),
+    NumberPurchases3_6Months = sum(Order.Date >= as.Date("2017-10-01") - months(3)),
+    PurchaseHistoryDiff = NumberPurchasesLast3Months - NumberPurchases3_6Months,
+    SalesLast3Months = sum(Sales[Order.Date >= as.Date("2018-01-01") - months(3)]),
+    Sales3_6Months = sum(Sales[Order.Date >= as.Date("2017-10-01") - months(3)]),
+    SalesHistoryDiff = SalesLast3Months - Sales3_6Months
+  )
+
+# Add recency and scores
+at_risk <- at_risk %>%
+  mutate(
+    Recency = as.numeric(as.Date("2018-01-01") - LastPurchase),
+    RecencyScore = case_when(
+      Recency <= 30 ~ 3,
+      Recency <= 60 ~ 2,
+      Recency <= 90 ~ 1,
+      Recency > 90 ~ 0
+    ),
+    FrequencyScore = case_when(
+      NumberPurchasesLast3Months != 0 & (NumberPurchasesLast3Months - PurchaseHistoryDiff > 2) ~ 3,
+      NumberPurchasesLast3Months != 0 & (NumberPurchasesLast3Months - PurchaseHistoryDiff > 0) ~ 2,
+      NumberPurchasesLast3Months != 0 & (NumberPurchasesLast3Months - PurchaseHistoryDiff > -2) ~ 1,
+      TRUE ~ 0
+    ),
+    SalesScore = case_when(
+      SalesLast3Months != 0 & (SalesLast3Months - SalesHistoryDiff > 20) ~ 3,
+      SalesLast3Months != 0 & (SalesLast3Months - SalesHistoryDiff > 0) ~ 2,
+      SalesLast3Months != 0 & (SalesLast3Months - SalesHistoryDiff > -20) ~ 1,
+      TRUE ~ 0
+    )
+  )
+
+```
+
+-   Suggest marketing approaches for “High Spenders”
+
+```{r}
+summary(at_risk$SalesHistoryDiff)
+
+```
+
+# Question 5: How does shipping mode affect profitability?
+
+## Objective: Analyze cost-to-serve across shipping modes
+
+### Tasks:
+
+-   Compare profit margins across shipping modes
+
+```{r}
+
+```
+
+-   Calculate profit per order for each shipping mode
+
+```{r}
+
+```
+
+-   Suggest optimal shipping strategy based on findings
+
+```{r}
+
+```
+
+## Extra Challenge:
+
+-   Identify 3 actionable business recommendations.
+
+```{r}
+
+```
+
+-   Propose 2 new questions for deeper analysis.
+
+```{r}
+
+```
+
+-   Estimate potential financial impact of your recommendations.
+
+```{r}
+
+```
+
+## Discussion Points:
+
+-   How do sales trends correlate with marketing initiatives?
+-   Are there regional preferences for product categories?
+-   What operational changes could improve low-margin categories?
+-   How might customer segmentation affect inventory management?
