@@ -11,6 +11,10 @@ editor_options:
 library(tidyr)
 library(tidyverse)
 library(ggplot2)
+library(viridis)
+library(dplyr)
+library(lubridate)
+library(psych)
 
 superstore <- read.csv("Sample - Superstore.csv")
 ```
@@ -329,9 +333,6 @@ print(customer_segment)
 -   Develop retention strategies for “At Risk” customers
 
 ```{r}
-library(dplyr)
-library(lubridate)
-
 # Get relevant customer data
 at_risk <- superstore %>%
   select(Order.Date, Customer.ID, Sales) %>%
@@ -374,12 +375,68 @@ at_risk <- at_risk %>%
 
 ```
 
+```{r}
+at_risk <- at_risk %>%
+  mutate(RiskScore = RecencyScore + FrequencyScore + SalesScore) %>%
+  mutate(RiskScore = ifelse(Recency > 365, NA,RiskScore )) %>%
+  mutate(CustomerStatus = case_when(
+    RiskScore == 0 ~ "Very High Risk",
+    RiskScore > 0 & RiskScore <7 ~ "Medium Risk",
+    RiskScore >= 7 ~ "Low Risk",
+    TRUE ~ "Lost"
+  ))
+```
+
+```{r}
+ggplot(at_risk, aes(x = factor(CustomerStatus, levels = c("Lost", "Very High Risk", "Medium Risk", "Low Risk")))) +
+  geom_bar() + theme_minimal() + labs(title = "Customer Count by Risk Category", x="Risk Category", y= "Count")
+```
+
+-\> There are about 100 customers defined as lost, which have not done a
+purchase within the past year. While reactivation is unlikely, these
+customers could be sent a discount code for their next purchase. Very
+high risk customers have a combination of low purchase recency,
+decreasing purchase frequency trend or decreasing monetary spending
+amount trend. As these customers have conducted a purchase in recent
+time though, they can be offered complementary products to their recent
+purchases.
+
 -   Suggest marketing approaches for “High Spenders”
 
 ```{r}
-summary(at_risk$SalesHistoryDiff)
+# extracting high spenders
+high_spenders <- superstore %>%
+  select(Customer.ID, Sales, Segment) %>%
+  group_by(Customer.ID) %>%
+  summarise(TotalSales = sum(Sales),
+            Segment = last(Segment)) %>%
+  arrange(desc(TotalSales))
 
 ```
+
+```{r}
+high_spender_plot <- ggplot(high_spenders, aes(x=Segment, y=TotalSales))
+high_spender_plot + geom_boxplot()
+```
+
+```{r}
+high_spenders_top <- high_spenders %>%
+  subset(TotalSales > 7500)
+length((high_spenders_top$TotalSales))
+```
+
+```{r}
+high_spender_plot2 <- ggplot(high_spenders_top, aes(x=TotalSales, fill=Segment))
+high_spender_plot2 + geom_histogram(binwidth = 2500, color="black") + theme_minimal() + labs(title="Customers with spent > $7500", y="Count", x="Sales Amount")
+```
+
+--\> There are about 50 customers with a spending of more than \$7500
+(about 7% of customers). These are predominantly in the consumer,
+followed by the corporate segment. It is recommended that an account
+executive is hired, working closely together with these kind of
+customers to exactly understand their needs and address them (e.g.
+discounts for more orders, complementary products to what they already
+need).
 
 # Question 5: How does shipping mode affect profitability?
 
@@ -390,20 +447,62 @@ summary(at_risk$SalesHistoryDiff)
 -   Compare profit margins across shipping modes
 
 ```{r}
+shipping_grouped <- superstore %>%
+  select(Ship.Mode, Sales, Profit) %>%
+  group_by(Ship.Mode) %>%
+  summarise(TotalSales = sum(Sales), 
+            TotalProfit = sum(Profit),
+            Count = n()) %>%
+  mutate(ProfitMargin = round(TotalProfit / TotalSales*100,2), 
+         ProfitPerOrder = round(TotalProfit / Count,2)) %>%
+  arrange(desc(ProfitMargin))
 
 ```
+
+```{r}
+shipping_plot <- ggplot(shipping_grouped, aes(x=Ship.Mode, y=ProfitMargin))
+shipping_plot + geom_col() + theme_minimal() + labs(titel="Profit Margin by Shipping Mode", x="Shipping Mode", y="Profit Margin in %")
+```
+
+-\> First Class has the highest Profit Margin, however only by a small
+margin to the others.
 
 -   Calculate profit per order for each shipping mode
 
 ```{r}
+profit_per_order_plot <- ggplot(shipping_grouped, aes(x=Ship.Mode, y=ProfitPerOrder))
+profit_per_order_plot + geom_col() + theme_minimal() + labs(titel="Profit per Order by Shipping Mode", x="Shipping Mode", y="Avg. Profit per Order")
+```
 
+```{r}
+ggplot(superstore, aes(x=Ship.Mode, y=Profit)) + geom_boxplot() + theme_minimal() + labs(title = "Distribution Profit per Order per Shipping Mode", x="Shipping Mode", y="Profit per Order")
+```
+
+```{r}
+ggplot(superstore, aes(y = Profit, x = Ship.Mode)) +
+  geom_point(m) +
+  scale_x_discrete(limits = c("Standard Class", "First Class", "Second Class", "Same Day"))
+
+```
+
+```{r}
+anova_result <- aov(Profit ~ Ship.Mode, data = superstore)
+summary(anova_result)
+```
+
+```{r}
+# Linear regression to model Profit based on Ship Mode
+model <- lm(Profit ~ Ship.Mode, data = superstore)
+
+# Display model summary
+summary(model)
 ```
 
 -   Suggest optimal shipping strategy based on findings
 
-```{r}
-
-```
+-\> The Anova shows no significant difference in the profit per order
+between the shipping types. Hence, there is no need to focus on shipping
+type to increase profitability of the company.
 
 ## Extra Challenge:
 
@@ -416,13 +515,11 @@ summary(at_risk$SalesHistoryDiff)
 -   Propose 2 new questions for deeper analysis.
 
 ```{r}
-
 ```
 
 -   Estimate potential financial impact of your recommendations.
 
 ```{r}
-
 ```
 
 ## Discussion Points:
