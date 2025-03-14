@@ -38,7 +38,6 @@ superstore$Ship.Date <- as.Date(superstore$Ship.Date, format = "%m/%d/%Y")
 table(superstore$Category)
 table(superstore$Region)
 table(superstore$Ship.Mode)
-
 ```
 
 ```{r}
@@ -295,7 +294,7 @@ sale_profit_plot + geom_point() + geom_smooth(method = "lm")
 
 ```{r}
 # Fit the linear regression model
-model <- lm(TotalSales ~ TotalProfit, data = performance_by_region)
+model <- lm(TotalProfit ~ TotalSales, data = performance_by_region)
 
 # Display the summary of the model
 summary(model)
@@ -329,6 +328,9 @@ customer_segment <- superstore %>%
   mutate(CustomersShare = round(Customers/ sum(Customers)*100,2))
 print(customer_segment)
 ```
+
+-\> Consumer with most customers (50%) and 50% more Sales than second
+category (corporate) with about \$1.2m
 
 -   Develop retention strategies for “At Risk” customers
 
@@ -479,23 +481,8 @@ ggplot(superstore, aes(x=Ship.Mode, y=Profit)) + geom_boxplot() + theme_minimal(
 ```
 
 ```{r}
-ggplot(superstore, aes(y = Profit, x = Ship.Mode)) +
-  geom_point(m) +
-  scale_x_discrete(limits = c("Standard Class", "First Class", "Second Class", "Same Day"))
-
-```
-
-```{r}
 anova_result <- aov(Profit ~ Ship.Mode, data = superstore)
 summary(anova_result)
-```
-
-```{r}
-# Linear regression to model Profit based on Ship Mode
-model <- lm(Profit ~ Ship.Mode, data = superstore)
-
-# Display model summary
-summary(model)
 ```
 
 -   Suggest optimal shipping strategy based on findings
@@ -508,23 +495,195 @@ type to increase profitability of the company.
 
 -   Identify 3 actionable business recommendations.
 
-```{r}
-
-```
+1.  Develop a customer retention strategy, as this is typically cheaper
+    than acquiring new customers
+2.  Evaluate discontinuation of furniture category due to low profit
+    margins
+3.  Analysis of discount strategy which frequently resulted in loss
+    making orders
 
 -   Propose 2 new questions for deeper analysis.
 
-```{r}
-```
-
--   Estimate potential financial impact of your recommendations.
+## Can we identify customer clusters based on their spending behaviour?
 
 ```{r}
+# get the purchase frequency and sales amount
+customer_segmentation <- superstore %>%
+  select(Customer.ID, Sales) %>%
+  group_by(Customer.ID) %>%
+  summarise(Purchases = n(),
+            TotalSales = round(sum(Sales)))
 ```
+
+```{r}
+# Scale the data (important for k-means)
+customer_scaled <- customer_segmentation %>%
+  select(Purchases, TotalSales) %>%
+  scale()  # Standardize the variables
+```
+
+```{r}
+# Elbow method
+wss <- numeric(10)  # To store WSS for different cluster sizes
+for (k in 1:10) {
+  kmeans_result <- kmeans(customer_scaled, centers = k)
+  wss[k] <- kmeans_result$tot.withinss
+}
+
+# Plotting the elbow plot
+elbow_plot <- ggplot(data.frame(k = 1:10, wss = wss), aes(x = k, y = wss)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Elbow Method for Optimal Number of Clusters",
+       x = "Number of Clusters",
+       y = "Within-cluster Sum of Squares (WSS)")
+
+print(elbow_plot)
+```
+
+```{r}
+library(cluster)
+
+sil_score <- numeric(10)
+for (k in 2:10) {  # Silhouette score isn't meaningful for k = 1
+  kmeans_result <- kmeans(customer_scaled, centers = k)
+  sil_score[k] <- mean(silhouette(kmeans_result$cluster, dist(customer_scaled))[, 3])
+}
+
+# Plot silhouette scores
+silhouette_plot <- ggplot(data.frame(k = 2:10, sil_score = sil_score[2:10]), aes(x = k, y = sil_score)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Silhouette Method for Optimal Number of Clusters",
+       x = "Number of Clusters",
+       y = "Silhouette Score")
+
+print(silhouette_plot)
+
+```
+
+```{r}
+# Apply k-means clustering
+set.seed(42)  # For reproducibility
+kmeans_result <- kmeans(customer_scaled, centers =3)
+
+# Add cluster labels to your data
+customer_segmentation$Cluster <- as.factor(kmeans_result$cluster)
+
+# Visualize the clusters
+ggplot(customer_segmentation, aes(x=Purchases, y=TotalSales, color=Cluster)) +
+  geom_point() +
+  labs(title = "Customer Segmentation by Purchases and Total Sales")
+```
+
+```{r}
+customer_segmentation %>%
+  group_by(Cluster) %>%
+  summarise(Count = n(), Sale = sum(TotalSales)) %>%
+  mutate(AvgSale = round(Sale/Count,2),
+         CountShare = round(Count/ sum(Count)*100,2),
+         SaleShare = round(Sale / sum(Sale)*100,2))
+```
+
+-\> We identified 3 customer clusters based on spending behaviour. About
+50% of customers have a low number of purchaes with a low spending
+amount. It should be checked if there spending behaviour can be further
+enforced, as these are the upcoming / promising customers. about 40% of
+customers have a high amount of purchases and medium amout of Sales. 10%
+of customers generate about 27% of sales and hence represent the most
+important customer group for the business.
+
+## Can we identify the most frequent product bundles purchased together, and what impact would targeted cross-selling have on sales and profit?
+
+```{r}
+library(arules)
+```
+
+```{r}
+product_bundles <- superstore %>%
+  select(Order.ID, Sub.Category) #Category instead
+
+write.csv(product_bundles, "filename.csv", row.names = FALSE)
+```
+
+```{r}
+# Convert the data frame to a transaction format
+transactions <- as(split(product_bundles$Sub.Category, product_bundles$Order.ID), "transactions")
+# Apply the Apriori algorithm to find frequent itemsets and generate rules
+rules <- apriori(transactions, parameter = list(supp = 0.002, conf = 0.5))
+
+# View the top rules based on lift
+inspect(sort(rules, by = "lift"))
+```
+
+-\> The analysis of the `product_bundles` dataset has revealed that
+**Binders** frequently appear as a consequential product in association
+rules. This indicates that **Binders** are often purchased alongside
+other items, such as **Appliances, Furnishings, Storage, and Paper**.
+The frequent presence of **Binders** on the right-hand side (rhs) of the
+rules suggests that when customers purchase combinations of these other
+products, they tend to also buy **Binders** with a relatively high
+likelihood.
+
+### Crosselling Potential of Binders (1 Example)
+
+```{r}
+
+AvgSalesBinders = median(subset(superstore, Sub.Category == "Binders")$Sales)
+AvgSalesBinders
+
+```
+
+-\> Binders are purchased for a value of about \~\$20, when purchased
+
+```{r}
+binder_potential <- superstore %>%
+  select(Sub.Category, Order.ID, Order.Date) %>%
+  #filter(Order.Date > as.Date("2017-01-01")) %>%
+  group_by(Order.ID) %>%
+  summarise(Category = list(Sub.Category))
+```
+
+```{r}
+# combination that sets up for Binder purchase
+sum(sapply(binder_potential$Category, function(x) all(c("Appliances", "Storage") %in% x)))
+# already bought binder
+sum(sapply(binder_potential$Category, function(x) all(c("Appliances", "Storage", "Binders") %in% x)))
+```
+
+-\> With targeted cross-selling there was an additional sales potential
+of about \$500 ((56-30) \* 20) in the past 4 years.
 
 ## Discussion Points:
 
 -   How do sales trends correlate with marketing initiatives?
+
+    -\> no input on marketing available
+
 -   Are there regional preferences for product categories?
+
+```{r}
+product_by_region <- superstore %>%
+  select(Category, Region)
+
+contingency_table <- product_by_region %>%
+  table()
+# Perform the chi-square test
+chi_square_result <- chisq.test(contingency_table)
+
+# View the result
+chi_square_result
+```
+
+-\> Chi Square test shows no significant preference for product
+categories in regions.
+
 -   What operational changes could improve low-margin categories?
+
+    -\> Reduce various costs related to product (purchase price,
+    overheads)
+
 -   How might customer segmentation affect inventory management?
+
+    -\> Segmenting customers by region and product category allows to
+    understand what kind of products are bought in certain regions
